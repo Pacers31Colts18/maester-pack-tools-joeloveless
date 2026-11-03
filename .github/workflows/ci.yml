@@ -1,0 +1,32 @@
+# Runs the module's Pester tests on each push and pull request. The tests use the real Maester checks, so Maester 3.0
+# (prerelease until it is released) is installed first.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Maester, Microsoft Graph Authentication and Pester
+        shell: pwsh
+        run: |
+          Install-PSResource -Name Maester -Prerelease -TrustRepository -Quiet
+          Install-PSResource -Name Microsoft.Graph.Authentication -TrustRepository -Quiet
+          Install-PSResource -Name Pester -TrustRepository -Quiet
+
+      - name: Pester
+        shell: pwsh
+        run: |
+          git config --global user.name ci; git config --global user.email ci@localhost
+          $r = Invoke-Pester ./tests -PassThru -Output Detailed
+          if ($r.FailedCount -gt 0 -or $r.TotalCount -eq 0) { exit 1 }
