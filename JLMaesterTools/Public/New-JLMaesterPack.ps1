@@ -5,8 +5,9 @@ function New-JLMaesterPack {
 
     .DESCRIPTION
         Runs New-MtPack for the Guid and Maester's own checks of the Id and Code, then writes the repository's layout:
-        maester-pack.json (read-only Graph scopes), maester-pack.guide.json, README.md, tests/suite.json and the
-        framework file that holds the benchmark name and version. Copies the shared helpers in, adds the pack's row to
+        maester-pack.json (read-only Graph scopes, Banner assets/banner.png), maester-pack.guide.json, README.md,
+        tests/suite.json and the framework file that holds the benchmark name and version. It creates the assets
+        folder but not the banner: add assets/banner.png (PNG, at most 1 MB) before the first release. Copies the shared helpers in, adds the pack's row to
         the repository README and a '## <folder> 0.1.0' section to CHANGELOG.md, then runs Test-JLMaesterPack on it.
         If anything fails, the pack folder is removed and the README and CHANGELOG are put back.
 
@@ -125,7 +126,8 @@ function New-JLMaesterPack {
             Suites          = @('tests')
             Helpers         = @('helpers')
             Guide           = 'maester-pack.guide.json'
-            Uses            = [ordered]@{
+            Banner          = 'assets/banner.png'
+            Uses           = [ordered]@{
                 Services     = @('Graph')
                 GraphScopes  = @('DeviceManagementConfiguration.Read.All', 'GroupMember.Read.All')
                 TenantWrites = @()
@@ -135,6 +137,8 @@ function New-JLMaesterPack {
             Categories      = @($Categories)
         }
         Write-JLTextFile -Path (Join-Path $packPath 'maester-pack.json') -Text ($manifest | ConvertTo-Json -Depth 6)
+        # The banner image is added by hand; until it is, git does not track the empty folder.
+        New-Item -ItemType Directory -Path (Join-Path $packPath 'assets') -Force | Out-Null
 
         $guide = [ordered]@{
             '$schema'     = 'https://maester.dev/schemas/maester-pack-guide-1.0.json'

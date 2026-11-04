@@ -8,6 +8,7 @@
     PowerShellVersion    = '7.4'
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
+        'Export-JLMaesterTestCsv'
         'Find-JLIntuneSetting'
         'New-JLMaesterPack'
         'New-JLMaesterTest'

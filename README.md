@@ -47,7 +47,9 @@ New-JLMaesterTest -Pack cis-win11-intune-l1 -Recommendation 1.1 -Severity High `
     -FromPolicy 'W11_D_CISL1_*' -SettingDisplayName 'Allow Cortana Above Lock' -ValueDisplayName Block `
     -Description 'Cortana should not answer voice requests while the device is locked.'
 
-# Many tests from a CSV: draft them all, then write them all (or none, if any row fails)
+# Many tests from a CSV: write it from your policies, fill in the Recommendation column (rows left empty are
+# skipped), draft them all, then write them all (or none, if any row fails)
+Export-JLMaesterTestCsv -PolicyName 'W11_D_CISL1_*' -Pack cis-win11-intune-l1 -Path .\tests.csv
 New-JLMaesterTest -Path .\tests.csv -Pack cis-win11-intune-l1 -WhatIf | Format-Table Row, Id, Title, Area, Children
 New-JLMaesterTest -Path .\tests.csv -Pack cis-win11-intune-l1
 
@@ -76,8 +78,11 @@ The test passes when ...
 Write each test's `-Description` in your own words. Benchmark text is usually licensed; the test names the
 recommendation number instead.
 
+`Export-JLMaesterTestCsv -PolicyName '<policies>' -Path <csv>` writes the CSV for you from the policies: one row for each setting, and for a setting with children one row for the setting alone (`NoChildren` true) and one per child (picked with `ChildSettingDefinitionId`), as CIS numbers them for BitLocker. When the benchmark numbers a setting and its children as one recommendation (such as SMB v1), delete the child rows and clear `NoChildren`. A list (a user right, a deny list) gets every value with `in`; change it to `contains` when the benchmark says the list must include them. Names and value labels come from the policy. With `-Pack`, settings the pack already tests are left out. Fill in `Recommendation`; `New-JLMaesterTest -Path` skips and lists the rows you leave empty.
+
 A CSV for `-Path` has one test per row and `New-JLMaesterTest` parameter names as columns; an unknown column stops
-the run. Empty cells are left out, and `Expected` and the `Child*` columns take several values separated by `;`.
+the run. Empty cells are left out, and `SettingDefinitionId`, `Expected` and the `Child*` columns take several values
+separated by `;`.
 Parameters passed with `-Path` apply to every row, and a cell overrides them. Every row needs `Recommendation`,
 `Pack` and `Severity` (in a cell or passed with `-Path`) and the setting. With `FromPolicy`, the setting definition
 id is enough: the name, value, category and children come from the policy. `Find-JLIntuneSetting -PolicyName
@@ -96,6 +101,14 @@ setting definition id (or the picked child's), without the shared `device_vendor
 `abovelock_allowtoasts` gives `Test-JLAbovelockAllowtoasts`, so settings with the same name (such as the four event
 logs) never collide. A setting with several values, such as a user right's accounts, is
 checked with `in` unless the row sets `Operator`: every account the policy grants must be one of them.
+
+When one recommendation needs the same setting in several places, such as macOS Energy Saver's Display Sleep Timer
+under Desktop Power, Laptop Battery Power and Laptop Power, put every id in `SettingDefinitionId` (`a;b;c`, with
+`FromPolicy`): one test, which passes only when each setting passes on its own. `Expected` is one value for all of
+them (a `match` pattern such as `^([1-9]|10)$`) or one per setting in the same order (a choice setting's option ids
+differ per setting; `ValueDisplayName` alone also picks each one's option by its label). Area is the category the
+settings share (Energy Saver), and the function is named after the parts of the ids they share. Such a test takes no
+child settings.
 
 Area has no default for compliance and configuration profile settings (no Intune category); pass `-Area` for those.
 

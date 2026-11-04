@@ -123,6 +123,8 @@ Describe 'New-JLMaesterPack' {
         $manifest.Version | Should -Be '0.1.0'
         $manifest.Description | Should -Be 'Checks that Intune policies configure the Level 1 recommendations of the CIS Microsoft Intune for Windows 11 Benchmark v5.0.0. One test per setting.'
         $manifest.Uses.GraphScopes | Should -Be 'DeviceManagementConfiguration.Read.All', 'GroupMember.Read.All'
+        $manifest.Banner | Should -Be 'assets/banner.png'
+        Test-Path (Join-Path $script:packPath 'assets') -PathType Container | Should -BeTrue
         $suite = Get-Content (Join-Path $script:packPath 'tests/suite.json') -Raw | ConvertFrom-Json
         $suite.Tags | Should -Be 'CIS-Intune', 'L1'
         $suite.Frameworks[0].Key | Should -Be 'cis-intune-win11-l1'
@@ -499,9 +501,37 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
                             [pscustomobject]@{ id = 'p1'; name = 'W11_D_CISL1_AboveLock'; platforms = 'windows10' }
                             [pscustomobject]@{ id = 'p2'; name = 'Other'; platforms = 'windows10' }
                             [pscustomobject]@{ id = 'p3'; name = 'W11_D_CISL1_SMB'; platforms = 'windows10' }
+                            [pscustomobject]@{ id = 'p4'; name = 'MAC_D_CISL1_Energy'; platforms = 'macOS' }
                         )
                     }
                 }
+                # macOS Energy Saver: the same settings under each power source, as group settings.
+                "^beta/deviceManagement/configurationPolicies\('p4'\)/settings" {
+                    $power = {
+                        param($Group, $Timer, $Wake)
+                        [pscustomobject]@{
+                            settingInstance    = [pscustomobject]@{
+                                '@odata.type'               = '#microsoft.graph.deviceManagementConfigurationGroupSettingInstance'
+                                settingDefinitionId         = "mcx_$Group"
+                                groupSettingValue           = [pscustomobject]@{ children = @(
+                                        [pscustomobject]@{ '@odata.type' = '#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance'; settingDefinitionId = "mcx_$($Group)_display sleep timer"; simpleSettingValue = [pscustomobject]@{ value = $Timer } }
+                                        [pscustomobject]@{ '@odata.type' = '#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance'; settingDefinitionId = "mcx_$($Group)_wake on lan"; choiceSettingValue = [pscustomobject]@{ value = "mcx_$($Group)_wake on lan_$Wake"; children = @() } }
+                                    ) }
+                            }
+                            settingDefinitions = @(
+                                [pscustomobject]@{ id = "mcx_$Group"; displayName = $Group; categoryId = $Group }
+                                [pscustomobject]@{ id = "mcx_$($Group)_display sleep timer"; displayName = 'Display Sleep Timer'; categoryId = $Group }
+                                [pscustomobject]@{ id = "mcx_$($Group)_wake on lan"; displayName = 'Wake on LAN'; categoryId = $Group; options = @(
+                                        [pscustomobject]@{ itemId = "mcx_$($Group)_wake on lan_0"; displayName = 'False' }
+                                        [pscustomobject]@{ itemId = "mcx_$($Group)_wake on lan_1"; displayName = 'True' }) }
+                            )
+                        }
+                    }
+                    [pscustomobject]@{ value = @((& $power desktop 10 0), (& $power battery 5 0)) }
+                }
+                "^beta/deviceManagement/configurationCategories\('desktop'\)$" { [pscustomobject]@{ id = 'desktop'; displayName = 'Desktop Power'; parentCategoryId = 'energy' } }
+                "^beta/deviceManagement/configurationCategories\('battery'\)$" { [pscustomobject]@{ id = 'battery'; displayName = 'Laptop Battery Power'; parentCategoryId = 'energy' } }
+                "^beta/deviceManagement/configurationCategories\('energy'\)$" { [pscustomobject]@{ id = 'energy'; displayName = 'Energy Saver'; parentCategoryId = '00000000-0000-0000-0000-000000000000' } }
                 "^beta/deviceManagement/configurationPolicies\('p1'\)/settings" {
                     [pscustomobject]@{ value = @([pscustomobject]@{
                                 settingInstance    = [pscustomobject]@{
@@ -573,6 +603,26 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
                                     [pscustomobject]@{ id = 'rpc_auth'; displayName = 'Use authentication for outgoing RPC connections:'; categoryId = 'pers'; options = @(
                                             [pscustomobject]@{ itemId = 'rpc_auth_0'; displayName = 'Default' }
                                             [pscustomobject]@{ itemId = 'rpc_auth_1'; displayName = 'Authentication enabled' }) }
+                                )
+                            }
+                            # A parent whose child is a list, as Prevent installation of devices using drivers that match
+                            # these device setup classes: one row holds every value of the list.
+                            [pscustomobject]@{
+                                settingInstance    = [pscustomobject]@{
+                                    '@odata.type'       = '#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance'
+                                    settingDefinitionId = 'dev'
+                                    choiceSettingValue  = [pscustomobject]@{ value = 'dev_1'; children = @(
+                                            [pscustomobject]@{
+                                                '@odata.type'                = '#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance'
+                                                settingDefinitionId          = 'dev_list'
+                                                simpleSettingCollectionValue = @([pscustomobject]@{ value = '{class-a}' }, [pscustomobject]@{ value = '{class-b}' })
+                                            }) }
+                                }
+                                settingDefinitions = @(
+                                    [pscustomobject]@{ id = 'dev'; displayName = 'Prevent installation of devices using drivers that match these device setup classes'; categoryId = 'pers'; options = @(
+                                            [pscustomobject]@{ itemId = 'dev_0'; displayName = 'Disabled' }
+                                            [pscustomobject]@{ itemId = 'dev_1'; displayName = 'Enabled' }) }
+                                    [pscustomobject]@{ id = 'dev_list'; displayName = 'Prevented Classes'; categoryId = 'pers' }
                                 )
                             }
                             # A user right: several accounts.
@@ -685,6 +735,19 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
         { New-JLMaesterTest @common -Recommendation 4.7.3 -ChildExpected rpc_protocol_1 } | Should -Throw '*pass -ChildSettingDefinitionId too*'
     }
 
+    It 'checks a picked list child with -ChildExpected, and refuses one without it' {
+        $common = @{ RepoPath = (New-FixtureRepo); Pack = 'cis-win11-intune-l1'; Severity = 'High'; FromPolicy = 'W11_D_CISL1_*'; SettingDefinitionId = 'dev'; Recommendation = '4.10.9.1.3'; WhatIf = $true }
+        $null = New-FixturePack -Repo $common.RepoPath
+        $out = New-JLMaesterTest @common -ChildSettingDefinitionId dev_list -ChildOperator contains -ChildExpected '{class-a}|{class-b}' -ChildValueDisplayName 'Classes A and B'
+        $out.Children.SettingDefinitionId | Should -Be 'dev_list'
+        $out.Children.Expected | Should -Be '{class-a}|{class-b}'
+        $out.Title | Should -Be 'Prevent installation of devices using drivers that match these device setup classes: Prevented Classes is set to Enabled: Classes A and B'
+        $out.Ps1 | Should -Match ([regex]::Escape("[string[]] `$ChildExpected = '{class-a}|{class-b}',"))
+        $out.Ps1 | Should -Match ([regex]::Escape("[string[]] `$ChildOperator = 'contains',"))
+        { New-JLMaesterTest @common -ChildSettingDefinitionId dev_list } | Should -Throw "*'Prevented Classes' has 2 values; pick it with -ChildSettingDefinitionId and pass -ChildExpected*"
+        { New-JLMaesterTest @common } | Should -Throw "*'Prevented Classes' has 2 values*"
+    }
+
     It 'escapes Markdown in the names and values the .md shows, so \\*\NETLOGON shows as written' {
         $repo = New-FixtureRepo
         $null = New-FixturePack -Repo $repo
@@ -792,6 +855,94 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
         Read-Text (Join-Path $repo 'cis-win11-intune-l1/tests/Test.MP.JL.CISW11INT.L1.001.ps1') | Should -Match ([regex]::Escape("Area         = 'Personalization',"))
         $out[0].Children | Should -Be 'Configure MrxSmb10 driver = Disable driver (recommended)'
         Test-Path (Join-Path $repo 'cis-win11-intune-l1/tests/Test.MP.JL.CISW11INT.L1.001.ps1') | Should -BeTrue
+    }
+
+    It 'writes a CSV of the policies, which New-JLMaesterTest -Path takes once the Recommendations are filled in' {
+        $repo = New-FixtureRepo
+        $null = New-FixturePack -Repo $repo
+        $csv = Join-Path $repo 'export.csv'
+        $result = Export-JLMaesterTestCsv -PolicyName 'W11_D_CISL1_*' -Path $csv -RepoPath $repo
+        $result.Rows | Should -Be 9
+        $rows = @(Import-Csv $csv)
+        $rows[0].PSObject.Properties.Name | Should -Be 'Recommendation', 'Severity', 'FromPolicy', 'SettingDefinitionId', 'SettingDisplayName', 'Operator', 'Expected', 'ValueDisplayName', 'NoChildren',
+        'ChildSettingDefinitionId', 'ChildDisplayName', 'ChildOperator', 'ChildExpected', 'ChildValueDisplayName'
+        $key = { param($r) "$($r.SettingDefinitionId)|$($r.ChildSettingDefinitionId)" }
+        @($rows | ForEach-Object { & $key $_ }) | Should -Be 'device_vendor_msft_policy_config_abovelock_allowcortanaabovelock|', 'smb|', 'smb|smb_driver',
+        'rpc|', 'rpc|rpc_protocol', 'rpc|rpc_auth', 'dev|', 'dev|dev_list', 'ur_network|'
+        $row = { param($k) $rows | Where-Object { (& $key $_) -eq $k } }
+        $above = & $row 'device_vendor_msft_policy_config_abovelock_allowcortanaabovelock|'
+        $above.Expected | Should -Be 'device_vendor_msft_policy_config_abovelock_allowcortanaabovelock_0'
+        $above.ValueDisplayName | Should -Be 'Block'
+        $above.FromPolicy | Should -Be 'W11_D_CISL1_*'
+        $above.Recommendation | Should -BeNullOrEmpty
+        # A setting with children: the setting alone, and one row per child with its name and value.
+        (& $row 'smb|').NoChildren | Should -Be 'true'
+        (& $row 'smb|smb_driver').ChildDisplayName | Should -Be 'Configure MrxSmb10 driver'
+        (& $row 'smb|smb_driver').ChildValueDisplayName | Should -Be 'Disable driver (recommended)'
+        (& $row 'rpc|rpc_protocol').ChildDisplayName | Should -Be 'Protocol to use for outgoing RPC connections'
+        # Lists: in, every value.
+        (& $row 'dev|dev_list').ChildExpected | Should -Be '{class-a}|{class-b}'
+        (& $row 'dev|dev_list').ChildOperator | Should -Be 'in'
+        (& $row 'ur_network|').Expected | Should -Be '*S-1-5-32-544;*S-1-5-32-555'
+        (& $row 'ur_network|').Operator | Should -Be 'in'
+        (& $row 'ur_network|').SettingDisplayName | Should -Be 'Access From Network'
+
+        # Fill in three Recommendations; the other rows are skipped and listed.
+        (& $row 'device_vendor_msft_policy_config_abovelock_allowcortanaabovelock|').Recommendation = '1.1'
+        (& $row 'ur_network|').Recommendation = '90.2'
+        (& $row 'dev|dev_list').Recommendation = '4.10.9.1.3'
+        $rows | Export-Csv $csv -NoTypeInformation
+        $out = @(New-JLMaesterTest -RepoPath $repo -Path $csv -Pack cis-win11-intune-l1 -Severity High -WarningVariable warned -WarningAction SilentlyContinue)
+        $out.Title | Should -Be 'Allow Cortana Above Lock is set to Block',
+        'Prevent installation of devices using drivers that match these device setup classes: Prevented Classes is set to Enabled: {class-a}, {class-b}',
+        'Access From Network is set to *S-1-5-32-544, *S-1-5-32-555'
+        "$warned" | Should -Match 'Skipped 6 row\(s\) without a Recommendation: row 3 \(Configure SMB v1 client driver\);'
+        { Test-JLMaesterPack -RepoPath $repo -InformationAction SilentlyContinue } | Should -Not -Throw
+
+        # With -Pack, the settings the pack tests are left out (dev has one child, which its test names).
+        $null = Export-JLMaesterTestCsv -PolicyName 'W11_D_CISL1_*' -Path $csv -RepoPath $repo -Pack cis-win11-intune-l1
+        @(Import-Csv $csv | ForEach-Object { & $key $_ }) | Should -Be 'smb|', 'smb|smb_driver', 'rpc|', 'rpc|rpc_protocol', 'rpc|rpc_auth'
+
+        Set-Content $csv ('Recommendation,SettingDefinitionId', ',a')
+        { New-JLMaesterTest -RepoPath $repo -Path $csv -Pack cis-win11-intune-l1 -Severity High -WarningAction SilentlyContinue } | Should -Throw '*has no row with a Recommendation*'
+    }
+
+    It 'checks several settings in one test, from the policy or a CSV row, and the pack still passes every check' {
+        $repo = New-FixtureRepo
+        $null = New-FixturePack -Repo $repo
+        $timers = 'mcx_desktop_display sleep timer', 'mcx_battery_display sleep timer'
+        # One value for all of them: a match pattern for "10 or less, but not 0".
+        $out = New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 2.11.1.1 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId $timers -Operator match -Expected '^([1-9]|10)$' -ValueDisplayName '10 or less, but not 0'
+        $out.Title | Should -Be 'Display Sleep Timer is set to 10 or less, but not 0'
+        $out.Area | Should -Be 'Energy Saver'
+        $out.FunctionName | Should -Be 'Test-JLMcxDisplaySleepTimer'
+        $out.SettingDefinitionId | Should -Be $timers
+        $ps1 = Read-Text (Join-Path $repo 'cis-win11-intune-l1/tests/Test.MP.JL.CISW11INT.L1.001.ps1')
+        $ps1 | Should -Match ([regex]::Escape("[string[]] `$SettingDefinitionId = ('mcx_desktop_display sleep timer', 'mcx_battery_display sleep timer'),"))
+        $ps1 | Should -Match ([regex]::Escape("[string[]] `$Expected = '^([1-9]|10)$',"))
+        $ps1 | Should -Match "Operator\s+= 'match'"
+        $out.Markdown | Should -Match ([regex]::Escape('set each of **Energy Saver > Desktop Power > Display Sleep Timer** and **Energy Saver > Laptop Battery Power > Display Sleep Timer** to **10 or less, but not 0**'))
+        $out.Markdown | Should -Match ([regex]::Escape('2. Add **Energy Saver** > **Desktop Power** > **Display Sleep Timer** and **Energy Saver** > **Laptop Battery Power** > **Display Sleep Timer** and set each to'))
+        $out.Markdown | Should -Match 'policies for macOS set each of'
+
+        # A choice setting: the label picks each setting's own option id, from a CSV row (ids separated by ';').
+        $csv = Join-Path $repo 'mac.csv'
+        Set-Content $csv ('Recommendation,Severity,FromPolicy,SettingDefinitionId,ValueDisplayName', '2.11.1.3,Medium,MAC_D_CISL1_*,mcx_desktop_wake on lan;mcx_battery_wake on lan,False')
+        $wake = @(New-JLMaesterTest -RepoPath $repo -Path $csv -Pack cis-win11-intune-l1)
+        $wake.Title | Should -Be 'Wake on LAN is set to False'
+        $ps1 = Read-Text (Join-Path $repo 'cis-win11-intune-l1/tests/Test.MP.JL.CISW11INT.L1.002.ps1')
+        $ps1 | Should -Match ([regex]::Escape("[string[]] `$Expected = ('mcx_desktop_wake on lan_0', 'mcx_battery_wake on lan_0'),"))
+        { Test-JLMaesterPack -RepoPath $repo -InformationAction SilentlyContinue } | Should -Not -Throw
+
+        # Export -Pack leaves out the settings the tests check.
+        $export = Join-Path $repo 'export.csv'
+        $null = Export-JLMaesterTestCsv -PolicyName 'MAC_D_CISL1_*' -Path $export -RepoPath $repo -Pack cis-win11-intune-l1
+        @(Import-Csv $export) | Should -BeNullOrEmpty
+
+        { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -SettingDefinitionId $timers -Expected 1 -SettingDisplayName T -ValueDisplayName 1 -CategoryPath C -WhatIf } | Should -Throw '*need -FromPolicy*'
+        { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId $timers -Expected 1, 2, 3 -ValueDisplayName 1 -WhatIf } | Should -Throw '*one value for all of them, or one per setting*'
+        { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId $timers -ChildSettingDefinitionId x -WhatIf } | Should -Throw '*one -SettingDefinitionId*'
+        { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId 'mcx_desktop_display sleep timer', nope -WhatIf } | Should -Throw "*sets 'nope'*"
     }
 
     It 'picks another option by its label' {

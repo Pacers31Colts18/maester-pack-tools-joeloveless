@@ -24,9 +24,10 @@ function New-JLMaesterTest {
         A CSV file with one test per row; the columns are this command's parameter names (Recommendation, Severity,
         FromPolicy, SettingDisplayName, ValueDisplayName, Area, Description, ...). Empty cells are left out; Expected
         and the Child* columns take several values separated by ';'. Other parameters passed with -Path, such as -Pack,
-        apply to every row and a cell overrides them. All or nothing: every row is drafted first, and if any fails
-        nothing is written. Get-MtTest and Test-MtPack then run once; if they reject the result, every file is put
-        back. With -WhatIf it returns every draft.
+        apply to every row and a cell overrides them. A row without a Recommendation is skipped and listed in a
+        warning (Export-JLMaesterTestCsv writes every setting; fill in the ones to test). All or nothing: every row
+        is drafted first, and if any fails nothing is written. Get-MtTest and Test-MtPack then run once; if they
+        reject the result, every file is put back. With -WhatIf it returns every draft.
 
     .PARAMETER Pack
         The pack folder, such as cis-win11-intune-l1.
@@ -43,11 +44,20 @@ function New-JLMaesterTest {
         The setting's name as Intune shows it, such as 'Allow Cortana Above Lock'. With -FromPolicy it may be a
         wildcard that picks the setting.
 
+    .PARAMETER SettingDefinitionId
+        The settings catalog setting definition id. With -FromPolicy, several when one recommendation needs each of
+        them, such as the same timer under Desktop Power, Laptop Battery Power and Laptop Power (';' between them in a
+        CSV cell): one test that passes only when every one passes on its own, without child settings. Their names and
+        categories come from the policy; -SettingDisplayName names them in the title.
+
     .PARAMETER ValueDisplayName
-        The required value's label, such as 'Block'. With -FromPolicy it picks the option by label.
+        The required value's label, such as 'Block'. With -FromPolicy it picks the option by label (of every setting,
+        when there are several).
 
     .PARAMETER Expected
         The required value: the option id for a choice setting (..._0), the value for others. Several for in/notIn.
+        With several settings: one value for all of them (such as a match pattern) or one per setting in the same
+        order, a setting's values for in, notIn and contains separated by '|'.
 
     .PARAMETER ChildSettingDefinitionId
         Child settings that must also be set, in the same policy (such as the options under an Administrative
@@ -141,7 +151,7 @@ function New-JLMaesterTest {
         [ValidateSet('Critical', 'High', 'Medium', 'Low', 'Info')] [string] $Severity,
         [string] $Description,
         [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration')] [string] $Source = 'settingsCatalog',
-        [string] $SettingDefinitionId,
+        [string[]] $SettingDefinitionId = @(),
         [string] $Platform,
         [string] $Property,
         [string] $ODataType,
@@ -262,12 +272,67 @@ function New-JLMaesterTest {
 
     # --- Read the setting from a policy in the tenant ---------------------------------------------------------------
     $pickedChildren = $false
-    if ($FromPolicy) {
+    $SettingDefinitionId = @($SettingDefinitionId | Where-Object { $_ })
+    # Several settings that one recommendation needs, each checked on its own (Test-JlIntuneSetting): the same timer
+    # under Desktop Power, Laptop Battery Power and Laptop Power.
+    $several = $SettingDefinitionId.Count -gt 1
+    # Each setting as the .md names it: its category path and name, from the policy.
+    $settingPaths = @()
+    $bare = { param($Text) ([string]$Text -replace ':\s*$', '').Trim() }
+    if ($several) {
+        if (-not $FromPolicy) { throw 'Several -SettingDefinitionId need -FromPolicy: their names and categories come from the policy.' }
         if ($Source -ne 'settingsCatalog') { throw '-FromPolicy reads settings catalog policies; use -Source settingsCatalog.' }
-        if (-not $SettingDisplayName -and -not $SettingDefinitionId) { throw 'With -FromPolicy, pass -SettingDisplayName or -SettingDefinitionId to pick the setting.' }
+        if ($ChildSettingDefinitionId.Count -or $ChildExpected.Count -or $ChildDisplayName.Count -or $ChildValueDisplayName.Count -or $ChildOperator.Count) { throw 'Child settings go with one -SettingDefinitionId.' }
+        $hits = @(foreach ($settingId in $SettingDefinitionId) {
+                $found = @(Find-JLIntuneSetting -PolicyName $FromPolicy -SettingDefinitionId ([System.Management.Automation.WildcardPattern]::Escape($settingId)) | Where-Object { $_.Value.Count -gt 0 })
+                if (-not $found.Count) { throw "No policy named like '$FromPolicy' sets '$settingId'." }
+                $found
+            })
+        $first = @(foreach ($settingId in $SettingDefinitionId) { $hits | Where-Object SettingDefinitionId -EQ $settingId | Select-Object -First 1 })
+        $names = @($first | ForEach-Object { & $bare $_.DisplayName } | Select-Object -Unique)
+        if (-not $SettingDisplayName) { $SettingDisplayName = $names -join ', ' }
+        $settingPaths = @($first | ForEach-Object { if ($_.CategoryPath) { "$($_.CategoryPath) > $(& $bare $_.DisplayName)" } else { & $bare $_.DisplayName } })
+        # The category the settings share, such as Energy Saver for Desktop Power, Laptop Battery Power and Laptop Power.
+        if (-not $CategoryPath) {
+            $paths = @($first | ForEach-Object { , @([string]$_.CategoryPath -split '\s*>\s*' | Where-Object { $_ }) })
+            $shared = @()
+            for ($i = 0; $i -lt $paths[0].Count; $i++) {
+                $part = $paths[0][$i]
+                if (@($paths | Where-Object { $_.Count -le $i -or $_[$i] -ne $part }).Count) { break }
+                $shared += $part
+            }
+            $CategoryPath = $shared -join ' > '
+        }
+        if (-not $Platform) { $Platform = (@($first[0].Platform -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 1) }
+        if (-not $CspUrl -and $first[0].InfoUrls.Count) { $CspUrl = $first[0].InfoUrls[0] }
+        if ($Operator -ne 'exists' -and -not $Expected) {
+            # A choice setting's option ids differ per setting, so Expected is one value per setting, in order.
+            $Expected = @(foreach ($hit in $first) {
+                    $settingHits = @($hits | Where-Object SettingDefinitionId -EQ $hit.SettingDefinitionId)
+                    if ($ValueDisplayName) {
+                        $option = @($hit.Options | Where-Object DisplayName -EQ $ValueDisplayName)
+                        if ($option.Count -ne 1) { throw "'$($hit.SettingDefinitionId)' has no option labelled '$ValueDisplayName'. Options: $(($hit.Options | ForEach-Object { "$($_.DisplayName) ($($_.ItemId))" }) -join ', ')." }
+                        $option[0].ItemId
+                    } else {
+                        if (@($settingHits | ForEach-Object { $_.Value -join '|' } | Select-Object -Unique).Count -ne 1 -or $hit.Value.Count -ne 1) { throw "The matching policies set '$($hit.SettingDefinitionId)' to several values; pass -ValueDisplayName or -Expected." }
+                        $hit.Value[0]
+                    }
+                })
+            if (-not $ValueDisplayName) {
+                $labels = @($first | ForEach-Object { $_.ValueDisplayName } | Select-Object -Unique)
+                if ($labels.Count -ne 1) { throw "The settings have different values ($($labels -join ', ')); pass -ValueDisplayName." }
+                $ValueDisplayName = $labels[0]
+            }
+        }
+        Write-Verbose "From $FromPolicy`: $($SettingDefinitionId -join ', ') = $($Expected -join ', ') ($ValueDisplayName), category '$CategoryPath', platform $Platform."
+    } elseif ($FromPolicy) {
+        if ($Source -ne 'settingsCatalog') { throw '-FromPolicy reads settings catalog policies; use -Source settingsCatalog.' }
+        if (-not $SettingDisplayName -and -not $SettingDefinitionId.Count) { throw 'With -FromPolicy, pass -SettingDisplayName or -SettingDefinitionId to pick the setting.' }
         $find = @{ PolicyName = $FromPolicy }
-        if ($SettingDisplayName) { $find.Name = $SettingDisplayName }
-        if ($SettingDefinitionId) { $find.SettingDefinitionId = $SettingDefinitionId }
+        # The id picks the setting on its own; a name given with it is only the title's (and may hold wildcard
+        # characters, such as 'Windows 10 [Version 1511] and later').
+        if ($SettingDefinitionId.Count) { $find.SettingDefinitionId = $SettingDefinitionId[0] }
+        elseif ($SettingDisplayName) { $find.Name = $SettingDisplayName }
         $hits = @(Find-JLIntuneSetting @find | Where-Object { $_.Value.Count -gt 0 })
         $settingIds = @($hits | ForEach-Object { $_.SettingDefinitionId } | Select-Object -Unique)
         if ($settingIds.Count -ne 1) {
@@ -275,10 +340,9 @@ function New-JLMaesterTest {
             throw "-FromPolicy found $($settingIds.Count) matching settings with a value$(if ($list) { ":`n - $list" } else { '.' })`nNarrow -SettingDisplayName or pass -SettingDefinitionId."
         }
         $hit = $hits[0]
-        $SettingDefinitionId = $hit.SettingDefinitionId
+        $SettingDefinitionId = @($hit.SettingDefinitionId)
         # Intune names some settings with a trailing space ('Backup Directory ') and many children like a form field
-        # ('Protocol to use for outgoing RPC connections:'); both are left out of the title and .md.
-        $bare = { param($Text) ([string]$Text -replace ':\s*$', '').Trim() }
+        # ('Protocol to use for outgoing RPC connections:'); both are left out of the title and .md ($bare).
         if (-not $SettingDisplayName -or [System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($SettingDisplayName)) { $SettingDisplayName = & $bare $hit.DisplayName }
         if (-not $CategoryPath) { $CategoryPath = $hit.CategoryPath }
         if (-not $Platform) { $Platform = (@($hit.Platform -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 1) }
@@ -322,10 +386,10 @@ function New-JLMaesterTest {
             $byId = @{}
             foreach ($row in $rows) { $byId[$row.SettingDefinitionId] = $row }
             $found = @(foreach ($row in $rows) {
-                if ($row.SettingDefinitionId -eq $SettingDefinitionId -or $row.Value.Count -eq 0) { continue }
+                if ($row.SettingDefinitionId -eq $hit.SettingDefinitionId -or $row.Value.Count -eq 0) { continue }
                 $parent = $row.ParentSettingDefinitionId
-                for ($depth = 0; $parent -and $parent -ne $SettingDefinitionId -and $depth -lt 10; $depth++) { $parent = if ($byId.ContainsKey($parent)) { $byId[$parent].ParentSettingDefinitionId } else { '' } }
-                if ($parent -eq $SettingDefinitionId) { $row }
+                for ($depth = 0; $parent -and $parent -ne $hit.SettingDefinitionId -and $depth -lt 10; $depth++) { $parent = if ($byId.ContainsKey($parent)) { $byId[$parent].ParentSettingDefinitionId } else { '' } }
+                if ($parent -eq $hit.SettingDefinitionId) { $row }
             })
             if ($pick.Count) {
                 $pickedChildren = $true
@@ -337,9 +401,12 @@ function New-JLMaesterTest {
                 })
             }
             foreach ($row in $found) {
-                if ($row.Value.Count -ne 1) { throw "The child setting '$($row.DisplayName)' has $($row.Value.Count) values; pass -ChildSettingDefinitionId and -ChildExpected, or -NoChildren." }
+                # A list child (such as a deny list of setup classes) holds several values: only a picked child whose
+                # values are given can be checked, as the policy's values alone don't say whether the list must
+                # include them (contains) or be limited to them (in).
+                if ($row.Value.Count -ne 1 -and -not ($pick.Count -and $givenExpected.Count)) { throw "The child setting '$($row.DisplayName)' has $($row.Value.Count) values; pick it with -ChildSettingDefinitionId and pass -ChildExpected (the values separated by '|') with -ChildOperator contains or in, or pass -NoChildren." }
                 $ChildSettingDefinitionId += $row.SettingDefinitionId
-                $ChildExpected += [string]$row.Value[0]
+                $ChildExpected += [string](@($row.Value) -join '|')
                 $ChildDisplayName += $(if ($row.DisplayName) { & $bare $row.DisplayName } else { $row.SettingDefinitionId })
                 $ChildValueDisplayName += $row.ValueDisplayName
             }
@@ -354,15 +421,17 @@ function New-JLMaesterTest {
     $childCount = $ChildSettingDefinitionId.Count
     if (-not $SkipReason) {
         if ($Source -eq 'settingsCatalog') {
-            if (-not $SettingDefinitionId) { throw 'Source settingsCatalog needs -SettingDefinitionId (or -FromPolicy).' }
+            if (-not $SettingDefinitionId.Count) { throw 'Source settingsCatalog needs -SettingDefinitionId (or -FromPolicy).' }
             if (-not $Platform) { $Platform = 'windows10' }
             if ($Property -or $ODataType) { throw '-Property and -ODataType are for the compliance and deviceConfiguration sources.' }
         } else {
             if (-not $Property -or -not $ODataType) { throw "Source $Source needs -Property and -ODataType." }
-            if ($SettingDefinitionId -or $Platform) { throw '-SettingDefinitionId and -Platform are for the settingsCatalog source.' }
+            if ($SettingDefinitionId.Count -or $Platform) { throw '-SettingDefinitionId and -Platform are for the settingsCatalog source.' }
         }
         if ($Operator -ne 'exists' -and -not $Expected) { throw "Operator $Operator needs -Expected (or -FromPolicy)." }
-        if ($Operator -notin 'in', 'notIn', 'contains' -and @($Expected).Count -gt 1) { throw "Operator $Operator takes one expected value; in, notIn and contains take several." }
+        if ($several) {
+            if ($Operator -ne 'exists' -and @($Expected).Count -notin 1, $SettingDefinitionId.Count) { throw "-SettingDefinitionId has $($SettingDefinitionId.Count) settings and -Expected $(@($Expected).Count) values; pass one value for all of them, or one per setting (a setting's values for in, notIn and contains separated by '|')." }
+        } elseif ($Operator -notin 'in', 'notIn', 'contains' -and @($Expected).Count -gt 1) { throw "Operator $Operator takes one expected value; in, notIn and contains take several." }
         if (-not $SettingDisplayName) { throw 'Pass -SettingDisplayName: the setting''s name as Intune shows it.' }
         if ($Operator -ne 'exists' -and -not $ValueDisplayName) { throw 'Pass -ValueDisplayName: the required value''s label, such as Block.' }
         if ($ChildOperator.Count -and $ChildOperator.Count -ne $childCount) { throw "-ChildSettingDefinitionId has $childCount value(s) and -ChildOperator $($ChildOperator.Count); pass one operator per child setting, or none for eq." }
@@ -416,7 +485,18 @@ function New-JLMaesterTest {
         $nameSource = if ($SkipReason) { $SettingDisplayName }
         elseif ($Source -ne 'settingsCatalog') { "$($ODataType -replace '^#?microsoft\.graph\.', '') $Property" }
         elseif ($pickedChildren) { (@($ChildSettingDefinitionId) | ForEach-Object { & $stripId $_ }) -join ' ' }
-        else { & $stripId $SettingDefinitionId }
+        elseif ($several) {
+            # The '_' parts every id shares at its start and end: com.apple.mcx_..._display sleep timer under the three
+            # power sources gives com.apple.mcx display sleep timer.
+            $parts = @($SettingDefinitionId | ForEach-Object { , @((& $stripId $_) -split '_') })
+            $shortest = ($parts | ForEach-Object { $_.Count } | Measure-Object -Minimum).Minimum
+            $head = @(for ($i = 0; $i -lt $shortest; $i++) { $part = $parts[0][$i]; if (@($parts | Where-Object { $_[$i] -ne $part }).Count) { break }; $part })
+            $tail = @(for ($i = 1; $i -le $shortest - $head.Count; $i++) { $part = $parts[0][-$i]; if (@($parts | Where-Object { $_[-$i] -ne $part }).Count) { break }; $part })
+            [array]::Reverse($tail)
+            $common = @($head) + @($tail)
+            if ($common.Count) { $common -join ' ' } else { & $stripId $SettingDefinitionId[0] }
+        }
+        else { & $stripId $SettingDefinitionId[0] }
         $FunctionName = 'Test-JL' + (ConvertTo-JLPascalCase -Text $nameSource)
     }
     foreach ($file in (Get-ChildItem -LiteralPath $testsDir -Filter 'Test.*.ps1')) {
@@ -479,8 +559,13 @@ function New-JLMaesterTest {
             $ps1.Add('        # settingsCatalog only: the platform the policy targets.')
             $ps1.Add("        [string] `$Platform = $(ConvertTo-JLQuoted -Text $Platform),")
             $ps1.Add('')
-            $ps1.Add('        # The settings catalog setting definition id to check.')
-            $ps1.Add("        [string] `$SettingDefinitionId = $(ConvertTo-JLQuoted -Text $SettingDefinitionId),")
+            if ($several) {
+                $ps1.Add('        # The settings catalog setting definition ids to check; each must pass on its own.')
+                $ps1.Add("        [string[]] `$SettingDefinitionId = $(& $listLiteral $SettingDefinitionId),")
+            } else {
+                $ps1.Add('        # The settings catalog setting definition id to check.')
+                $ps1.Add("        [string] `$SettingDefinitionId = $(ConvertTo-JLQuoted -Text $SettingDefinitionId[0]),")
+            }
         } else {
             $ps1.Add('        # compliance / deviceConfiguration only: the policy type, such as #microsoft.graph.windows10CompliancePolicy.')
             $ps1.Add("        [string] `$ODataType = $(ConvertTo-JLQuoted -Text $ODataType),")
@@ -489,7 +574,8 @@ function New-JLMaesterTest {
             $ps1.Add("        [string] `$Property = $(ConvertTo-JLQuoted -Text $Property),")
         }
         $ps1.Add('')
-        $ps1.Add('        # The value the recommendation requires (the option id for a choice setting).')
+        if ($several) { $ps1.Add('        # The value each setting requires, in the same order, or one value for all of them (the option id for a choice setting).') }
+        else { $ps1.Add('        # The value the recommendation requires (the option id for a choice setting).') }
         $ps1.Add($expectedLine)
         $ps1.Add('')
         if ($childCount) {
@@ -569,6 +655,13 @@ function New-JLMaesterTest {
         $childSteps = ", then set $(@(for ($i = 0; $i -lt $childCount; $i++) { "**$($mdChildName[$i])** to **$($mdChildValue[$i])**" }) -join ' and ')"
     }
     $passes = "The test passes when an assigned $policyKind sets **$settingPath** to $valueText$childPasses, and no other assigned policy sets it to something else."
+    if ($several) {
+        # Each setting by its own path, as the Intune UI shows it: **Energy Saver** > **Desktop Power** > **Display Sleep Timer**.
+        $joinAnd = { param([string[]] $Items) if ($Items.Count -le 1) { $Items -join '' } else { "$($Items[0..($Items.Count - 2)] -join ', ') and $($Items[-1])" } }
+        $mdPaths = @($settingPaths | ForEach-Object { & $esc $_ })
+        $settingSteps = & $joinAnd @($mdPaths | ForEach-Object { (@($_ -split ' > ') | ForEach-Object { "**$_**" }) -join ' > ' })
+        $passes = "The test passes when assigned $($policyKind -replace '^settings catalog policy', 'settings catalog policies') set each of $(& $joinAnd @($mdPaths | ForEach-Object { "**$_**" })) to $valueText, and no other assigned policy sets one of them to something else."
+    }
     if ($SkipReason) { $passes = "This test is always skipped: $($SkipReason.Trim().TrimEnd('.')). Check **$mdSetting** on the devices, or in the results of the script that sets it." }
     $levelText = if ($Level -match '^L(\d+)$') { " (Level $($Matches[1]))" } elseif ($Level) { " ($Level)" } else { '' }
     if (-not $Remediation -and $SkipReason) {
@@ -576,7 +669,7 @@ function New-JLMaesterTest {
     } elseif (-not $Remediation) {
         $Remediation = switch ($Source) {
             'settingsCatalog' {
-                "1. In the [Microsoft Intune admin center](https://intune.microsoft.com), go to **Devices** > **Configuration** and open`n   (or create) a settings catalog policy for $platformLong.`n2. Add $settingSteps and set it to $valueText$childSteps.`n3. Assign the policy to your $(if ($platformShort) { "$platformShort " })devices, and remove any other assigned policy that sets it to something else."
+                "1. In the [Microsoft Intune admin center](https://intune.microsoft.com), go to **Devices** > **Configuration** and open`n   (or create) a settings catalog policy for $platformLong.`n2. Add $settingSteps and set $(if ($several) { 'each' } else { 'it' }) to $valueText$childSteps.`n3. Assign the policy to your $(if ($platformShort) { "$platformShort " })devices, and remove any other assigned policy that sets $(if ($several) { 'one of them' } else { 'it' }) to something else."
             }
             'compliance' {
                 "1. In the [Microsoft Intune admin center](https://intune.microsoft.com), go to **Devices** > **Compliance** and open (or create)`n   the compliance policy.`n2. Set $settingSteps to $valueText.`n3. Assign the policy to your devices, and remove any other assigned compliance policy that sets it to something else."
@@ -618,7 +711,7 @@ function New-JLMaesterTest {
         Title               = $Title
         FunctionName        = $FunctionName
         Area                = $Area
-        SettingDefinitionId = $(if ($SkipReason) { '' } elseif ($Source -eq 'settingsCatalog') { $SettingDefinitionId } else { $Property })
+        SettingDefinitionId = $(if ($SkipReason) { '' } elseif ($Source -ne 'settingsCatalog') { $Property } elseif ($several) { , @($SettingDefinitionId) } else { $SettingDefinitionId[0] })
         Expected            = @($Expected | Where-Object { $null -ne $_ })
         Children            = @(for ($i = 0; $i -lt $childCount; $i++) { [pscustomobject]@{ SettingDefinitionId = $ChildSettingDefinitionId[$i]; Operator = $(if ($ChildOperator.Count) { $ChildOperator[$i] } else { 'eq' }); Expected = $ChildExpected[$i]; DisplayName = $ChildDisplayName[$i]; ValueDisplayName = $ChildValueDisplayName[$i] } })
         # With -Replace, the title of the test it rewrites.

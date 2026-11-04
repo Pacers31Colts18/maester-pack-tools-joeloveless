@@ -5,7 +5,7 @@ function New-JLMaesterTestBatch {
 
     .DESCRIPTION
         Columns are New-JLMaesterTest parameter names (any case); an unknown column stops the run. Empty cells are left
-        out. Expected and the Child* columns take several values separated by ';'. Parameters passed with -Path apply to
+        out. SettingDefinitionId, Expected and the Child* columns take several values separated by ';'. Parameters passed with -Path apply to
         every row (-Defaults); a cell overrides them for its row.
 
         Every row is drafted first (with its -FromPolicy lookup), and recommendations and function names are checked
@@ -33,11 +33,14 @@ function New-JLMaesterTestBatch {
     foreach ($name in $command.Parameters.Keys) { if ($name -notin $notColumns) { $names[$name] = $name } }
     $unknown = @($rows[0].PSObject.Properties.Name | Where-Object { -not $names.ContainsKey($_) })
     if ($unknown.Count) { throw "$Path has column(s) that are not New-JLMaesterTest parameters: $($unknown -join ', '). Columns can be: $(($names.Values | Sort-Object) -join ', ')." }
-    $lists = 'Expected', 'ChildSettingDefinitionId', 'ChildExpected', 'ChildDisplayName', 'ChildValueDisplayName', 'ChildOperator'
+    $lists = 'SettingDefinitionId', 'Expected', 'ChildSettingDefinitionId', 'ChildExpected', 'ChildDisplayName', 'ChildValueDisplayName', 'ChildOperator'
 
     # --- Draft every row ----------------------------------------------------------------------------------------------
     # The drafts are not on disk, so each row of a pack gets the next number by hand, in row order.
     $nextNumber = @{}
+    # A row without a Recommendation is skipped (such as a setting from Export-JLMaesterTestCsv that the benchmark
+    # does not number); the run lists them.
+    $skipped = [System.Collections.Generic.List[string]]::new()
     $entries = for ($i = 0; $i -lt $rows.Count; $i++) {
         $params = @{} + $Defaults
         $params.RepoPath = $RepoPath
@@ -48,6 +51,12 @@ function New-JLMaesterTestBatch {
             $params[$name] = if ($name -in $lists) { @(($value -split ';').ForEach({ $_.Trim() }) | Where-Object { $_ }) }
             elseif ($command.Parameters[$name].ParameterType -eq [switch]) { [switch]($value.Trim() -match '^(true|yes|1)$') }
             else { $value.Trim() }
+        }
+        if (-not $params.Recommendation) {
+            $what = @($params.SettingDisplayName, $params.ChildDisplayName | Where-Object { $_ }) -join ': '
+            if (-not $what) { $what = @($params.SettingDefinitionId, $params.ChildSettingDefinitionId | Where-Object { $_ }) -join ': ' }
+            $skipped.Add("row $($i + 2)$(if ($what) { " ($what)" })")
+            continue
         }
         $entry = [pscustomobject]@{ Row = $i + 2; Recommendation = $params.Recommendation; Params = $params; Draft = $null; Error = $null }
         # A Replace row keeps its test's number and Severity, so it needs neither.
@@ -70,6 +79,8 @@ function New-JLMaesterTestBatch {
         $entry
     }
     $entries = @($entries)
+    if ($skipped.Count) { Write-Warning "Skipped $($skipped.Count) row(s) without a Recommendation: $($skipped -join '; ')." }
+    if ($entries.Count -eq 0) { throw "$Path has no row with a Recommendation." }
 
     # Two rows of one CSV can't see each other in a draft: the same recommendation, or the same function, in one pack.
     foreach ($group in @($entries | Where-Object Draft | Group-Object { "$($_.Params.Pack)|$($_.Params.Recommendation)" } | Where-Object Count -GT 1)) {
