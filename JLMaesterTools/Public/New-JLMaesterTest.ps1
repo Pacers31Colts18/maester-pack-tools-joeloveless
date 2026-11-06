@@ -44,6 +44,16 @@ function New-JLMaesterTest {
         The setting's name as Intune shows it, such as 'Allow Cortana Above Lock'. With -FromPolicy it may be a
         wildcard that picks the setting.
 
+    .PARAMETER Source
+        Where the setting lives: settingsCatalog (the default), compliance or deviceConfiguration with -ODataType and
+        -Property, or tenantSetting with -Property: the tenant's Compliance policy settings, such as secureByDefault
+        and deviceComplianceCheckinThresholdDays, which apply to every device.
+
+    .PARAMETER Property
+        The property to check, dots for nested, name[key=value] to keep the items of a list that match. A compliance
+        policy's Mark device noncompliant, in hours, is
+        scheduledActionsForRule.scheduledActionConfigurations[actionType=block].gracePeriodHours.
+
     .PARAMETER SettingDefinitionId
         The settings catalog setting definition id. With -FromPolicy, several when one recommendation needs each of
         them, such as the same timer under Desktop Power, Laptop Battery Power and Laptop Power (';' between them in a
@@ -150,7 +160,7 @@ function New-JLMaesterTest {
         # Required, except with -Replace (the old test's); checked in the body so -Replace can leave it out.
         [ValidateSet('Critical', 'High', 'Medium', 'Low', 'Info')] [string] $Severity,
         [string] $Description,
-        [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration')] [string] $Source = 'settingsCatalog',
+        [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration', 'tenantSetting')] [string] $Source = 'settingsCatalog',
         [string[]] $SettingDefinitionId = @(),
         [string] $Platform,
         [string] $Property,
@@ -425,7 +435,10 @@ function New-JLMaesterTest {
             if (-not $Platform) { $Platform = 'windows10' }
             if ($Property -or $ODataType) { throw '-Property and -ODataType are for the compliance and deviceConfiguration sources.' }
         } else {
-            if (-not $Property -or -not $ODataType) { throw "Source $Source needs -Property and -ODataType." }
+            if ($Source -eq 'tenantSetting') {
+                if (-not $Property) { throw 'Source tenantSetting needs -Property.' }
+                if ($ODataType) { throw '-ODataType is for the compliance and deviceConfiguration sources.' }
+            } elseif (-not $Property -or -not $ODataType) { throw "Source $Source needs -Property and -ODataType." }
             if ($SettingDefinitionId.Count -or $Platform) { throw '-SettingDefinitionId and -Platform are for the settingsCatalog source.' }
         }
         if ($Operator -ne 'exists' -and -not $Expected) { throw "Operator $Operator needs -Expected (or -FromPolicy)." }
@@ -551,8 +564,8 @@ function New-JLMaesterTest {
         $ps1.Add('}')
     } else {
         $ps1.Add('    param(')
-        $ps1.Add('        # Where the setting lives: settingsCatalog, compliance or deviceConfiguration.')
-        $ps1.Add("        [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration')]")
+        $ps1.Add('        # Where the setting lives: settingsCatalog, compliance, deviceConfiguration or tenantSetting.')
+        $ps1.Add("        [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration', 'tenantSetting')]")
         $ps1.Add("        [string] `$Source = '$Source',")
         $ps1.Add('')
         if ($Source -eq 'settingsCatalog') {
@@ -567,10 +580,12 @@ function New-JLMaesterTest {
                 $ps1.Add("        [string] `$SettingDefinitionId = $(ConvertTo-JLQuoted -Text $SettingDefinitionId[0]),")
             }
         } else {
-            $ps1.Add('        # compliance / deviceConfiguration only: the policy type, such as #microsoft.graph.windows10CompliancePolicy.')
-            $ps1.Add("        [string] `$ODataType = $(ConvertTo-JLQuoted -Text $ODataType),")
-            $ps1.Add('')
-            $ps1.Add('        # The policy property to check, dots for nested.')
+            if ($ODataType) {
+                $ps1.Add('        # compliance / deviceConfiguration only: the policy type, such as #microsoft.graph.windows10CompliancePolicy.')
+                $ps1.Add("        [string] `$ODataType = $(ConvertTo-JLQuoted -Text $ODataType),")
+                $ps1.Add('')
+            }
+            $ps1.Add('        # The property to check, dots for nested.')
             $ps1.Add("        [string] `$Property = $(ConvertTo-JLQuoted -Text $Property),")
         }
         $ps1.Add('')
@@ -604,7 +619,10 @@ function New-JLMaesterTest {
         # The splat's = signs line up under its longest key.
         $splat = [ordered]@{ Source = '$Source' }
         if ($Source -eq 'settingsCatalog') { $splat.Platform = '$Platform'; $splat.SettingDefinitionId = '$SettingDefinitionId' }
-        else { $splat.ODataType = '$ODataType'; $splat.Property = '$Property' }
+        else {
+            if ($ODataType) { $splat.ODataType = '$ODataType' }
+            $splat.Property = '$Property'
+        }
         $splat.Operator = "'$Operator'"
         $splat.Expected = '$Expected'
         if ($childCount) { $splat.ChildSettingDefinitionId = '$ChildSettingDefinitionId'; $splat.ChildExpected = '$ChildExpected' }
@@ -646,7 +664,7 @@ function New-JLMaesterTest {
         'lt' { "less than **$mdValue**" }
         default { "**$mdValue**" }
     }
-    $policyKind = switch ($Source) { 'settingsCatalog' { "settings catalog policy for $platformShort" } 'compliance' { 'compliance policy' } 'deviceConfiguration' { 'configuration profile' } }
+    $policyKind = switch ($Source) { 'settingsCatalog' { "settings catalog policy for $platformShort" } 'compliance' { 'compliance policy' } 'deviceConfiguration' { 'configuration profile' } 'tenantSetting' { 'tenant setting' } }
     # Child settings, as the Intune UI shows them under the setting: **Configure MrxSmb10 driver** set to **Disable driver**.
     $childPasses = ''
     $childSteps = ''
@@ -662,6 +680,7 @@ function New-JLMaesterTest {
         $settingSteps = & $joinAnd @($mdPaths | ForEach-Object { (@($_ -split ' > ') | ForEach-Object { "**$_**" }) -join ' > ' })
         $passes = "The test passes when assigned $($policyKind -replace '^settings catalog policy', 'settings catalog policies') set each of $(& $joinAnd @($mdPaths | ForEach-Object { "**$_**" })) to $valueText, and no other assigned policy sets one of them to something else."
     }
+    if ($Source -eq 'tenantSetting') { $passes = "The test passes when the tenant's Compliance policy settings set **$settingPath** to $valueText." }
     if ($SkipReason) { $passes = "This test is always skipped: $($SkipReason.Trim().TrimEnd('.')). Check **$mdSetting** on the devices, or in the results of the script that sets it." }
     $levelText = if ($Level -match '^L(\d+)$') { " (Level $($Matches[1]))" } elseif ($Level) { " ($Level)" } else { '' }
     if (-not $Remediation -and $SkipReason) {
@@ -673,6 +692,9 @@ function New-JLMaesterTest {
             }
             'compliance' {
                 "1. In the [Microsoft Intune admin center](https://intune.microsoft.com), go to **Devices** > **Compliance** and open (or create)`n   the compliance policy.`n2. Set $settingSteps to $valueText.`n3. Assign the policy to your devices, and remove any other assigned compliance policy that sets it to something else."
+            }
+            'tenantSetting' {
+                "1. In the [Microsoft Intune admin center](https://intune.microsoft.com), go to **Devices** > **Compliance** > **Compliance policy settings**.`n2. Set $settingSteps to $valueText."
             }
             'deviceConfiguration' {
                 "1. In the [Microsoft Intune admin center](https://intune.microsoft.com), go to **Devices** > **Configuration** and open the`n   configuration profile.`n2. Set $settingSteps to $valueText.`n3. Assign the profile to your devices, and remove any other assigned profile that sets it to something else."

@@ -62,8 +62,8 @@ function Test-JLAbovelockAllowcortanaabovelock {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
-        # Where the setting lives: settingsCatalog, compliance or deviceConfiguration.
-        [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration')]
+        # Where the setting lives: settingsCatalog, compliance, deviceConfiguration or tenantSetting.
+        [ValidateSet('settingsCatalog', 'compliance', 'deviceConfiguration', 'tenantSetting')]
         [string] $Source = 'settingsCatalog',
 
         # settingsCatalog only: the platform the policy targets.
@@ -496,6 +496,45 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
         Mock Get-MgContext -ModuleName JLMaesterTools { [pscustomobject]@{ TenantId = 'tenant' } }
         Mock Invoke-MgGraphRequest -ModuleName JLMaesterTools {
             switch -Regex ($Uri) {
+                '^beta/deviceManagement/deviceConfigurations$' {
+                    [pscustomobject]@{ value = @(
+                            [pscustomobject]@{
+                                '@odata.type'                         = '#microsoft.graph.iosGeneralDeviceConfiguration'
+                                id                                    = 'd1'
+                                displayName                           = 'IOS_D_CISL1_Restrictions'
+                                version                               = 3
+                                roleScopeTagIds                       = @('0')
+                                supportsScopeTags                     = $true
+                                iCloudBlockBackup                     = $true
+                                siriBlocked                           = $false
+                                passcodeMinimumLength                 = 6
+                                # Immediately: a value, not the default.
+                                passcodeMinutesOfInactivityBeforeLock = 0
+                                passcodeExpirationDays                = $null
+                                passcodeRequiredType                  = 'alphanumeric'
+                                safariCookieSettings                  = 'browserDefault'
+                                emailInDomainSuffixes                 = @('contoso.com', 'fabrikam.com')
+                                networkUsageRules                     = @()
+                                appsVisibilityList                    = @([pscustomobject]@{ name = 'App' })
+                                mediaContentRatingAustralia           = [pscustomobject]@{ '@odata.type' = '#microsoft.graph.mediaContentRatingAustralia'; movieRating = 'mature'; tvRating = 'allAllowed' }
+                            }
+                            [pscustomobject]@{ '@odata.type' = '#microsoft.graph.iosGeneralDeviceConfiguration'; id = 'd2'; displayName = 'IOS_D_CISL1_Restrictions2'; iCloudBlockBackup = $true }
+                            [pscustomobject]@{ '@odata.type' = '#microsoft.graph.iosDeviceFeaturesConfiguration'; id = 'd3'; displayName = 'IOS_D_CISL1_Features'; lockScreenFootnote = 'Return to IT'; wallpaperDisplayLocation = 'notConfigured' }
+                            [pscustomobject]@{ '@odata.type' = '#microsoft.graph.iosGeneralDeviceConfiguration'; id = 'd4'; displayName = 'Other'; cameraBlocked = $true }
+                        )
+                    }
+                }
+                '^beta/deviceManagement/deviceCompliancePolicies\?\$expand=scheduledActionsForRule' {
+                    [pscustomobject]@{ value = @(
+                            [pscustomobject]@{ '@odata.type' = '#microsoft.graph.iosCompliancePolicy'; id = 'c1'; displayName = 'IOS_D_CISL1_Compliance'; securityBlockJailbrokenDevices = $true; deviceThreatProtectionRequiredSecurityLevel = 'unavailable'; osMinimumVersion = '26.0'
+                                scheduledActionsForRule = @([pscustomobject]@{ ruleName = 'PasswordRequired'; scheduledActionConfigurations = @(
+                                        [pscustomobject]@{ actionType = 'block'; gracePeriodHours = 0 }
+                                        [pscustomobject]@{ actionType = 'notification'; gracePeriodHours = 72 }
+                                    ) })
+                            }
+                        )
+                    }
+                }
                 '^beta/deviceManagement/configurationPolicies\?' {
                     [pscustomobject]@{ value = @(
                             [pscustomobject]@{ id = 'p1'; name = 'W11_D_CISL1_AboveLock'; platforms = 'windows10' }
@@ -864,7 +903,7 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
         $result = Export-JLMaesterTestCsv -PolicyName 'W11_D_CISL1_*' -Path $csv -RepoPath $repo
         $result.Rows | Should -Be 9
         $rows = @(Import-Csv $csv)
-        $rows[0].PSObject.Properties.Name | Should -Be 'Recommendation', 'Severity', 'FromPolicy', 'SettingDefinitionId', 'SettingDisplayName', 'Operator', 'Expected', 'ValueDisplayName', 'NoChildren',
+        $rows[0].PSObject.Properties.Name | Should -Be 'Recommendation', 'Severity', 'FromPolicy', 'Source', 'ODataType', 'Property', 'CategoryPath', 'SettingDefinitionId', 'SettingDisplayName', 'Operator', 'Expected', 'ValueDisplayName', 'NoChildren',
         'ChildSettingDefinitionId', 'ChildDisplayName', 'ChildOperator', 'ChildExpected', 'ChildValueDisplayName'
         $key = { param($r) "$($r.SettingDefinitionId)|$($r.ChildSettingDefinitionId)" }
         @($rows | ForEach-Object { & $key $_ }) | Should -Be 'device_vendor_msft_policy_config_abovelock_allowcortanaabovelock|', 'smb|', 'smb|smb_driver',
@@ -943,6 +982,81 @@ Describe 'Find-JLIntuneSetting and New-JLMaesterTest -FromPolicy' {
         { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId $timers -Expected 1, 2, 3 -ValueDisplayName 1 -WhatIf } | Should -Throw '*one value for all of them, or one per setting*'
         { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId $timers -ChildSettingDefinitionId x -WhatIf } | Should -Throw '*one -SettingDefinitionId*'
         { New-JLMaesterTest -RepoPath $repo -Pack cis-win11-intune-l1 -Recommendation 9.9 -Severity Medium -FromPolicy 'MAC_D_CISL1_*' -SettingDefinitionId 'mcx_desktop_display sleep timer', nope -WhatIf } | Should -Throw "*sets 'nope'*"
+    }
+
+    It 'writes a CSV of configuration profiles and compliance policies, and leaves out what is not configured' {
+        $repo = New-FixtureRepo
+        $null = New-FixturePack -Repo $repo
+        $csv = Join-Path $repo 'ios.csv'
+        $null = Export-JLMaesterTestCsv -PolicyName 'IOS_D_CISL1_*' -Path $csv -RepoPath $repo -WarningVariable warned -WarningAction SilentlyContinue
+        $rows = @(Import-Csv $csv)
+        $rows.Property | Should -Be 'iCloudBlockBackup', 'passcodeMinimumLength', 'passcodeMinutesOfInactivityBeforeLock', 'passcodeRequiredType', 'emailInDomainSuffixes',
+        'mediaContentRatingAustralia.movieRating', 'lockScreenFootnote', 'securityBlockJailbrokenDevices', 'osMinimumVersion',
+        'scheduledActionsForRule.scheduledActionConfigurations[actionType=block].gracePeriodHours', 'scheduledActionsForRule.scheduledActionConfigurations[actionType=notification].gracePeriodHours'
+        "$warned" | Should -Match 'IOS_D_CISL1_Restrictions: left out appsVisibilityList'
+        $row = { param($Property) $rows | Where-Object Property -EQ $Property }
+        $backup = & $row iCloudBlockBackup
+        $backup.Source | Should -Be 'deviceConfiguration'
+        $backup.ODataType | Should -Be '#microsoft.graph.iosGeneralDeviceConfiguration'
+        $backup.CategoryPath | Should -Be 'Device Restrictions'
+        $backup.SettingDisplayName | Should -Be 'iCloudBlockBackup'
+        $backup.Expected | Should -Be 'true'
+        $backup.ValueDisplayName | Should -Be 'Yes'
+        $backup.FromPolicy | Should -BeNullOrEmpty
+        (& $row passcodeMinutesOfInactivityBeforeLock).Expected | Should -Be '0'
+        (& $row emailInDomainSuffixes).Expected | Should -Be 'contoso.com;fabrikam.com'
+        (& $row emailInDomainSuffixes).Operator | Should -Be 'in'
+        (& $row lockScreenFootnote).CategoryPath | Should -Be 'Device Features'
+        (& $row securityBlockJailbrokenDevices).Source | Should -Be 'compliance'
+        (& $row securityBlockJailbrokenDevices).CategoryPath | Should -Be 'Compliance'
+        (& $row 'scheduledActionsForRule.scheduledActionConfigurations[actionType=notification].gracePeriodHours').Expected | Should -Be '72'
+
+        # Fill in the rows: the benchmark's name and the section; the rest stays as exported.
+        $backup.Recommendation = '3.3.9'
+        $backup.SettingDisplayName = 'Block iCloud backup'
+        $backup.CategoryPath = 'Device Restrictions > Cloud and Storage'
+        $jail = & $row securityBlockJailbrokenDevices
+        $jail.Recommendation = '4.1'
+        $jail.SettingDisplayName = 'Jailbroken devices'
+        $jail.ValueDisplayName = 'Block'
+        (& $row 'mediaContentRatingAustralia.movieRating').Recommendation = '9.3'
+        $action = & $row 'scheduledActionsForRule.scheduledActionConfigurations[actionType=block].gracePeriodHours'
+        $action.Recommendation = '4.3'
+        $action.SettingDisplayName = 'Mark device noncompliant'
+        $action.ValueDisplayName = 'Immediately'
+        $action.CategoryPath = 'Compliance > Actions for noncompliance'
+        $rows | Export-Csv $csv -NoTypeInformation
+        $out = @(New-JLMaesterTest -RepoPath $repo -Path $csv -Pack cis-win11-intune-l1 -Severity High -WarningAction SilentlyContinue)
+        $out.Title | Should -Be 'Block iCloud backup is set to Yes', 'mediaContentRatingAustralia.movieRating is set to mature', 'Jailbroken devices is set to Block', 'Mark device noncompliant is set to Immediately'
+        $out.Area | Should -Be 'Cloud and Storage', 'Device Restrictions', 'Compliance', 'Actions for noncompliance'
+        { Test-JLMaesterPack -RepoPath $repo -InformationAction SilentlyContinue } | Should -Not -Throw
+
+        # With -Pack, the tested properties are left out; the other rows stay.
+        $null = Export-JLMaesterTestCsv -PolicyName 'IOS_D_CISL1_*' -Path $csv -RepoPath $repo -Pack cis-win11-intune-l1 -WarningAction SilentlyContinue
+        @(Import-Csv $csv).Property | Should -Be 'passcodeMinimumLength', 'passcodeMinutesOfInactivityBeforeLock', 'passcodeRequiredType', 'emailInDomainSuffixes', 'lockScreenFootnote', 'osMinimumVersion',
+        'scheduledActionsForRule.scheduledActionConfigurations[actionType=notification].gracePeriodHours'
+
+        { Export-JLMaesterTestCsv -PolicyName 'Nothing*' -Path $csv -RepoPath $repo } | Should -Throw "*named like 'Nothing*'*"
+    }
+
+    It 'writes a test of a tenant setting' {
+        $repo = New-FixtureRepo
+        $null = New-FixturePack -Repo $repo
+        $tenant = @{ RepoPath = $repo; Pack = 'cis-win11-intune-l1'; Severity = 'Medium'; Source = 'tenantSetting'; CategoryPath = 'Compliance > Compliance policy settings' }
+        $out = New-JLMaesterTest @tenant -Recommendation 4.6 -Property secureByDefault -Expected true -SettingDisplayName 'Mark devices with no compliance policy assigned as' -ValueDisplayName 'Not compliant'
+        $out.FunctionName | Should -Be 'Test-JLSecureByDefault'
+        $out.Area | Should -Be 'Compliance policy settings'
+        $ps1 = Read-Text $out.Files[0]
+        $ps1 | Should -Match ([regex]::Escape("[string] `$Source = 'tenantSetting',"))
+        $ps1 | Should -Not -Match 'ODataType'
+        $md = Read-Text $out.Files[1]
+        $md | Should -Match "The test passes when the tenant's Compliance policy settings set"
+        $md | Should -Match ([regex]::Escape('go to **Devices** > **Compliance** > **Compliance policy settings**'))
+        $days = New-JLMaesterTest @tenant -Recommendation 4.7 -Property deviceComplianceCheckinThresholdDays -Operator le -Expected 7 -SettingDisplayName 'Compliance status validity period (days)' -ValueDisplayName 7
+        $days.Title | Should -Be 'Compliance status validity period (days) is at most 7'
+        { Test-JLMaesterPack -RepoPath $repo -InformationAction SilentlyContinue } | Should -Not -Throw
+        { New-JLMaesterTest @tenant -Recommendation 4.8 -Expected true -SettingDisplayName A -ValueDisplayName B -WhatIf } | Should -Throw '*needs -Property*'
+        { New-JLMaesterTest @tenant -Recommendation 4.8 -Property x -ODataType y -Expected true -SettingDisplayName A -ValueDisplayName B -WhatIf } | Should -Throw '*-ODataType is for*'
     }
 
     It 'picks another option by its label' {

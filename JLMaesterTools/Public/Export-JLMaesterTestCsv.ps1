@@ -1,12 +1,12 @@
 function Export-JLMaesterTestCsv {
     <#
     .SYNOPSIS
-        Writes a CSV for New-JLMaesterTest -Path from the settings catalog policies in the tenant: one row per setting
-        and per child setting, every column filled except Recommendation and Severity. Read-only in the tenant.
+        Writes a CSV for New-JLMaesterTest -Path from the policies in the tenant: one row per setting and per child
+        setting, every column filled except Recommendation and Severity. Read-only in the tenant.
 
     .DESCRIPTION
-        Reads the policies whose name matches -PolicyName (Find-JLIntuneSetting) and writes one row for each test a
-        benchmark might number:
+        Reads the settings catalog policies, device configuration profiles (Device Restrictions, Device Features, ...)
+        and compliance policies whose name matches -PolicyName and writes one row for each test a benchmark might number:
 
         - a setting without children: one row, its value in Expected and ValueDisplayName;
         - a setting with children: a row for the setting alone (NoChildren true) and a row for each child, picked with
@@ -14,15 +14,26 @@ function Export-JLMaesterTestCsv {
           the setting and its children as one recommendation, delete the child rows and clear NoChildren;
         - a list (such as a user right's accounts or a deny list of setup classes): its values in Expected (separated
           by ';') or ChildExpected (separated by '|') with the operator in, so every configured value must be one of
-          them. Change it to contains when the benchmark says the list must include them.
+          them. Change it to contains when the benchmark says the list must include them;
+        - a property of a configuration profile or compliance policy that is configured: one row with Source, ODataType,
+          Property and CategoryPath instead of FromPolicy and SettingDefinitionId. A property set to false counts as
+          not configured, as in the pack helper, and 0 as a value. A compliance policy's actions for noncompliance
+          get a row each, with the grace period in hours.
+
+        A configuration profile or compliance policy has no setting names: SettingDisplayName is the Graph property,
+        so replace it with the benchmark's name, and ValueDisplayName is the value (Yes for true). CategoryPath is the
+        kind of policy (Device Restrictions, Device Features, Compliance); add the section after it, such as
+        'Device Restrictions > Cloud and Storage', and that section becomes the test's Area. Check Operator too: a
+        minimum length is written with the policy's value and eq, a benchmark's '6 or greater' is ge, and a free
+        text such as a lock screen message is exists. The tenant's Compliance policy settings belong to no policy, so
+        they are not exported: add a row with Source tenantSetting and Property, such as secureByDefault.
 
         The names and value labels come from the policy, so the CSV reads like the policy. A setting set in several
         policies is written once, from the first. Fill in Recommendation (and Severity, or pass -Severity to
         New-JLMaesterTest), then run New-JLMaesterTest -Path; rows left without a Recommendation are skipped.
 
         Needs a Microsoft Graph connection (Connect-Maester or Connect-MgGraph) with
-        DeviceManagementConfiguration.Read.All. Settings catalog only: compliance and configuration profile
-        settings are added with New-JLMaesterTest by hand.
+        DeviceManagementConfiguration.Read.All.
 
     .PARAMETER PolicyName
         The policy name, or a wildcard such as 'W11_D_CISBL_*'. Written to each row's FromPolicy.
@@ -31,8 +42,8 @@ function Export-JLMaesterTestCsv {
         The CSV to write. An existing file is replaced.
 
     .PARAMETER Pack
-        Leave out the settings that already have a test in this pack: a child named in a test, and a setting whose
-        test checks it alone or with every child the policy configures.
+        Leave out the settings that already have a test in this pack: a child named in a test, a setting whose test
+        checks it alone or with every child the policy configures, and a property tested on that policy type.
 
     .EXAMPLE
         Export-JLMaesterTestCsv -PolicyName 'W11_D_CISBL_*' -Pack cis-win11-intune-bl -Path .\bl.csv
@@ -54,10 +65,17 @@ function Export-JLMaesterTestCsv {
 
     # --- What the pack already tests ----------------------------------------------------------------------------------
     $tested = @{}
+    $testedProperties = @{}
     if ($Pack) {
         $info = Resolve-JLPack -Repo (Resolve-JLPacksRepo -RepoPath $RepoPath) -Pack $Pack
         foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $info.Path 'tests') -Filter 'Test.*.ps1')) {
             $text = Get-Content -LiteralPath $file.FullName -Raw
+            $property = [regex]::Match($text, "(?m)^\s*\[string\]\s*\`$Property\s*=\s*'((?:[^']|'')*)'").Groups[1].Value
+            if ($property) {
+                $policyType = [regex]::Match($text, "(?m)^\s*\[string\]\s*\`$ODataType\s*=\s*'((?:[^']|'')*)'").Groups[1].Value
+                $testedProperties["$policyType|$property"] = $true
+                continue
+            }
             # One setting ([string]), or several that one test checks each on its own ([string[]]).
             $settingLine = [regex]::Match($text, "(?m)^\s*\[string(\[\])?\]\s*\`$SettingDefinitionId\s*=\s*(.+)$").Groups[2].Value
             $settings = @([regex]::Matches($settingLine, "'((?:[^']|'')*)'") | ForEach-Object { $_.Groups[1].Value.Replace("''", "'") } | Where-Object { $_ })
@@ -72,12 +90,14 @@ function Export-JLMaesterTestCsv {
     }
 
     # --- The settings and their children ------------------------------------------------------------------------------
-    $found = @(Find-JLIntuneSetting -PolicyName $PolicyName)
-    if ($found.Count -eq 0) { throw "No setting found in the policies named like '$PolicyName'." }
+    # Find-JLIntuneSetting warns when no settings catalog policy has the name, but the policies may be of the other kinds.
+    $found = @(Find-JLIntuneSetting -PolicyName $PolicyName -WarningAction SilentlyContinue)
+    $profileSettings = @(Get-JLIntuneProfileSetting -PolicyName $PolicyName)
+    if ($found.Count -eq 0 -and $profileSettings.Count -eq 0) { throw "No setting found in the policies named like '$PolicyName'." }
 
     $rows = [System.Collections.Generic.List[object]]::new()
     $seen = @{}
-    $columns = 'Recommendation', 'Severity', 'FromPolicy', 'SettingDefinitionId', 'SettingDisplayName', 'Operator', 'Expected', 'ValueDisplayName', 'NoChildren',
+    $columns = 'Recommendation', 'Severity', 'FromPolicy', 'Source', 'ODataType', 'Property', 'CategoryPath', 'SettingDefinitionId', 'SettingDisplayName', 'Operator', 'Expected', 'ValueDisplayName', 'NoChildren',
     'ChildSettingDefinitionId', 'ChildDisplayName', 'ChildOperator', 'ChildExpected', 'ChildValueDisplayName'
     $newRow = {
         $row = [ordered]@{}
@@ -183,6 +203,25 @@ function Export-JLMaesterTestCsv {
                 $rows.Add([pscustomobject]$row)
             }
         }
+    }
+
+    # Configuration profiles and compliance policies: a property of a policy type is written once, like a setting.
+    foreach ($setting in $profileSettings) {
+        $key = "$($setting.ODataType)|$($setting.Property)"
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        if ($testedProperties.ContainsKey($key)) { continue }
+        $row = & $newRow
+        $row.FromPolicy = ''
+        $row.Source = $setting.Source
+        $row.ODataType = $setting.ODataType
+        $row.Property = $setting.Property
+        $row.CategoryPath = $setting.CategoryPath
+        $row.SettingDisplayName = $setting.Property
+        $row.Expected = $setting.Value -join ';'
+        $row.ValueDisplayName = $setting.ValueDisplayName
+        if (@($setting.Value).Count -gt 1) { $row.Operator = 'in' }
+        $rows.Add([pscustomobject]$row)
     }
 
     if ($PSCmdlet.ShouldProcess($Path, "Write $($rows.Count) row(s)")) {
