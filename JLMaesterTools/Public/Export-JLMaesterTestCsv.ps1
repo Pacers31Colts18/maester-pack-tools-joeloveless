@@ -20,31 +20,15 @@ function Export-JLMaesterTestCsv {
           not configured, as in the pack helper, and 0 as a value. A compliance policy's actions for noncompliance
           get a row each, with the grace period in hours.
 
-        A configuration profile or compliance policy has no setting names: SettingDisplayName is the Graph property,
-        so replace it with the benchmark's name, and ValueDisplayName is the value (Yes for true). CategoryPath is the
-        kind of policy (Device Restrictions, Device Features, Compliance); add the section after it, such as
-        'Device Restrictions > Cloud and Storage', and that section becomes the test's Area. Check Operator too: a
-        minimum length is written with the policy's value and eq, a benchmark's '6 or greater' is ge, and a free
-        text such as a lock screen message is exists. The tenant's Compliance policy settings belong to no policy, so
-        they are not exported: add a row with Source tenantSetting and Property, such as secureByDefault.
-
-        The names and value labels come from the policy, so the CSV reads like the policy. A setting set in several
-        policies is written once, from the first. Fill in Recommendation (and Severity, or pass -Severity to
-        New-JLMaesterTest), then run New-JLMaesterTest -Path; rows left without a Recommendation are skipped.
-
         Needs a Microsoft Graph connection (Connect-Maester or Connect-MgGraph) with
         DeviceManagementConfiguration.Read.All.
-
     .PARAMETER PolicyName
         The policy name, or a wildcard such as 'W11_D_CISBL_*'. Written to each row's FromPolicy.
-
     .PARAMETER Path
         The CSV to write. An existing file is replaced.
-
     .PARAMETER Pack
         Leave out the settings that already have a test in this pack: a child named in a test, a setting whose test
         checks it alone or with every child the policy configures, and a property tested on that policy type.
-
     .EXAMPLE
         Export-JLMaesterTestCsv -PolicyName 'W11_D_CISBL_*' -Pack cis-win11-intune-bl -Path .\bl.csv
 
@@ -63,7 +47,7 @@ function Export-JLMaesterTestCsv {
     # are left out, as New-JLMaesterTest does.
     $bare = { param($Text) ([string]$Text -replace ':\s*$', '').Trim() }
 
-    # --- What the pack already tests ----------------------------------------------------------------------------------
+    # What the pack already tests
     $tested = @{}
     $testedProperties = @{}
     if ($Pack) {
@@ -89,7 +73,7 @@ function Export-JLMaesterTestCsv {
         }
     }
 
-    # --- The settings and their children ------------------------------------------------------------------------------
+    # The settings and their children
     # Find-JLIntuneSetting warns when no settings catalog policy has the name, but the policies may be of the other kinds.
     $found = @(Find-JLIntuneSetting -PolicyName $PolicyName -WarningAction SilentlyContinue)
     $profileSettings = @(Get-JLIntuneProfileSetting -PolicyName $PolicyName)
@@ -122,7 +106,7 @@ function Export-JLMaesterTestCsv {
         [pscustomobject]@{ Values = $values; Labels = $labels }
     }
 
-    # Like Group-Object, but in the order the policies list them (Group-Object sorts by name).
+    # Put in the order the policy lists them.
     $inOrder = {
         param($Items, $Property)
         $order = [System.Collections.Generic.List[string]]::new()
@@ -139,7 +123,7 @@ function Export-JLMaesterTestCsv {
         $settings = @($policyGroup.Group)
         $byId = @{}
         foreach ($s in $settings) { if (-not $byId.ContainsKey($s.SettingDefinitionId)) { $byId[$s.SettingDefinitionId] = $s } }
-        # The nearest ancestor with a value: a group setting (such as the entries of Hardened UNC Paths) has none,
+        # The nearest parent with a value: a group setting (such as the entries of Hardened UNC Paths) has none,
         # so its entries belong to the setting above it, or stand alone at the top.
         $ownerOf = {
             param($Setting)

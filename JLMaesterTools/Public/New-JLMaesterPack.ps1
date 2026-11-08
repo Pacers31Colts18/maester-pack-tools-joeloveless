@@ -2,7 +2,6 @@ function New-JLMaesterPack {
     <#
     .SYNOPSIS
         Creates a pack in a packs repository: one baseline profile, ready for New-JLMaesterTest.
-
     .DESCRIPTION
         Runs New-MtPack for the Guid and Maester's own checks of the Id and Code, then writes the repository's layout:
         maester-pack.json (read-only Graph scopes, Banner assets/banner.png), maester-pack.guide.json, README.md,
@@ -12,44 +11,32 @@ function New-JLMaesterPack {
         If anything fails, the pack folder is removed and the README and CHANGELOG are put back.
 
         The Code and Guid can never change once the pack is released: a new Code is a new pack.
-
     .PARAMETER Folder
         The pack's folder, which is also the second part of its Id: pacers31colts18.<folder>.
-
     .PARAMETER Code
         The start of every test ID: MP.<Code>.<recommendation>. Up to three dot-separated parts of 2-10 letters or
         digits, each starting with a letter, such as JL.CISW11INT.L2.
-
     .PARAMETER Name
         The display name, such as 'CIS Windows 11 Intune L2'.
-
     .PARAMETER FrameworkKey
         The framework key that tests name in Control, such as cis-intune-win11-l2. One per pack.
-
     .PARAMETER BenchmarkName
         The benchmark's name, such as 'CIS Microsoft Intune for Windows 11 Benchmark'.
-
     .PARAMETER BenchmarkVersion
         The benchmark's version, such as 5.0.0. Set once, in the framework file.
-
     .PARAMETER BenchmarkUrl
         Where the benchmark is published.
-
     .PARAMETER Level
         The profile, such as L2: written to the framework file as the default Level of new tests, and used in the
         descriptions ('Level 2 recommendations').
-
     .PARAMETER Product
         The product every test of the pack is grouped under in the Maester report (its Category), written to the
         framework file for New-JLMaesterTest. Default: Intune.
-
     .PARAMETER Tags
         Suite tags that select every test of the pack, such as 'CIS-Intune', 'L2'. Maester reserves CIS, MT, Maester,
         Custom, All and the other built-in suite names.
-
     .PARAMETER Description
         The manifest Description. Defaults to one built from the benchmark; it must name v<BenchmarkVersion>.
-
     .EXAMPLE
         New-JLMaesterPack -Folder cis-win11-intune-l2 -Code JL.CISW11INT.L2 -Name 'CIS Windows 11 Intune L2' `
             -FrameworkKey cis-intune-win11-l2 -BenchmarkName 'CIS Microsoft Intune for Windows 11 Benchmark' `

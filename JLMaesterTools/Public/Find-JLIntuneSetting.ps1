@@ -3,26 +3,20 @@ function Find-JLIntuneSetting {
     .SYNOPSIS
         Looks up settings in the settings catalog policies of the connected tenant: their setting definition id, the
         value each policy sets, and every option with its label. Read-only.
-
     .DESCRIPTION
         Reads the policies whose name matches -PolicyName, with their settings and setting definitions, and returns one
         object per configured setting (child settings included) that matches -Name and -SettingDefinitionId. Use the
         result, or New-JLMaesterTest -FromPolicy, to fill a test's SettingDefinitionId and Expected value without
         copying ids by hand. Needs a Microsoft Graph connection (Connect-Maester or Connect-MgGraph) with
         DeviceManagementConfiguration.Read.All.
-
     .PARAMETER PolicyName
         The policy name, or a wildcard such as 'W11_D_CISL1_*'.
-
     .PARAMETER Name
         The setting's display name as Intune shows it, or a wildcard, such as 'Allow Cortana Above Lock'.
-
     .PARAMETER SettingDefinitionId
         The setting definition id, or a wildcard, such as '*abovelock*'.
-
     .EXAMPLE
         Find-JLIntuneSetting -PolicyName 'W11_D_CISL1_*' -Name 'Allow Cortana*'
-
     .EXAMPLE
         Find-JLIntuneSetting -PolicyName 'W11 baseline' | Format-Table DisplayName, ValueDisplayName, SettingDefinitionId
     #>

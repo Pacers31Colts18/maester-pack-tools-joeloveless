@@ -2,23 +2,18 @@ function Test-JLMaesterPack {
     <#
     .SYNOPSIS
         The checks CI runs on a packs repository, for every pack folder or the ones named.
-
     .DESCRIPTION
         Helpers in sync with shared/helpers; Test-MtPack valid with Low risk and no findings; every test valid with
         Get-MtTest; the benchmark version of the framework file named in the manifest Description, the guide Summary,
         the pack README and the pack's row in the repository README; and every test run through the engine without an
         invalid or error row. Without a Graph connection the engine skips the tests (ServiceNotConnected), which still
         proves the metadata and parameters are valid. Throws when any check fails.
-
     .PARAMETER RepoPath
         The packs repository. Defaults to the current folder.
-
     .PARAMETER Pack
         Pack folders to check. Defaults to every pack.
-
     .EXAMPLE
         Test-JLMaesterPack
-
     .EXAMPLE
         Test-JLMaesterPack -RepoPath C:\Users\jlove\GitHub\maester-packs-joeloveless -Pack cis-win11-intune-l1
     #>

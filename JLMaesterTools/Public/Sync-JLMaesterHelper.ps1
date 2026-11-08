@@ -2,21 +2,16 @@ function Sync-JLMaesterHelper {
     <#
     .SYNOPSIS
         Copies shared/helpers/*.ps1 of a packs repository into the helpers folder of every pack, with a header line.
-
     .DESCRIPTION
         A pack loads into a private module of its own and cannot see another pack's helpers, so every pack ships a
         copy; shared/helpers is the only place to change them. Each helper file must hold exactly one function, named
         after the file. With -Check nothing is written: it fails when any pack's copy differs (CI runs it this way).
-
     .PARAMETER RepoPath
         The packs repository. Defaults to the current folder.
-
     .PARAMETER Check
         Only compare; throw when a pack's helpers differ from shared/helpers.
-
     .EXAMPLE
         Sync-JLMaesterHelper -RepoPath C:\Users\jlove\GitHub\maester-packs-joeloveless
-
     .EXAMPLE
         Sync-JLMaesterHelper -Check
     #>

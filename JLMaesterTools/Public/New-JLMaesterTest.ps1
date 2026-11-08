@@ -3,7 +3,6 @@ function New-JLMaesterTest {
     .SYNOPSIS
         Adds a setting test to a pack: Test.<ID>.ps1 and .md, the framework requirement, the README row, the CHANGELOG
         line and, when the pack's current version is already released, a version bump.
-
     .DESCRIPTION
         The test ID is MP.<pack Code>.<number>: tests are numbered in the order they are added (001, 002, ...), the
         next free number in the pack. The recommendation is in the test's Control (the framework requirement) and in
@@ -19,7 +18,6 @@ function New-JLMaesterTest {
 
         After writing, Get-MtTest and Test-MtPack must accept the pack; otherwise every change is undone. -WhatIf
         writes nothing and returns both drafts in Ps1 and Markdown, to review before writing.
-
     .PARAMETER Path
         A CSV file with one test per row; the columns are this command's parameter names (Recommendation, Severity,
         FromPolicy, SettingDisplayName, ValueDisplayName, Area, Description, ...). Empty cells are left out; Expected
@@ -28,47 +26,37 @@ function New-JLMaesterTest {
         warning (Export-JLMaesterTestCsv writes every setting; fill in the ones to test). All or nothing: every row
         is drafted first, and if any fails nothing is written. Get-MtTest and Test-MtPack then run once; if they
         reject the result, every file is put back. With -WhatIf it returns every draft.
-
     .PARAMETER Pack
         The pack folder, such as cis-win11-intune-l1.
-
     .PARAMETER Recommendation
         The recommendation number as the benchmark writes it, such as 1.1 or 18.4.1. It links the test to the
         framework requirement (Control) and is named in the .md's Description section; the test ID is a number.
-
     .PARAMETER Description
         What the setting does and why it matters, in your own words (markdown). The first paragraph of the .md's
         Description section, before the recommendation line. Optional.
-
     .PARAMETER SettingDisplayName
         The setting's name as Intune shows it, such as 'Allow Cortana Above Lock'. With -FromPolicy it may be a
         wildcard that picks the setting.
-
     .PARAMETER Source
         Where the setting lives: settingsCatalog (the default), compliance or deviceConfiguration with -ODataType and
         -Property, or tenantSetting with -Property: the tenant's Compliance policy settings, such as secureByDefault
         and deviceComplianceCheckinThresholdDays, which apply to every device.
-
     .PARAMETER Property
         The property to check, dots for nested, name[key=value] to keep the items of a list that match. A compliance
         policy's Mark device noncompliant, in hours, is
         scheduledActionsForRule.scheduledActionConfigurations[actionType=block].gracePeriodHours.
-
     .PARAMETER SettingDefinitionId
         The settings catalog setting definition id. With -FromPolicy, several when one recommendation needs each of
         them, such as the same timer under Desktop Power, Laptop Battery Power and Laptop Power (';' between them in a
         CSV cell): one test that passes only when every one passes on its own, without child settings. Their names and
         categories come from the policy; -SettingDisplayName names them in the title.
-
     .PARAMETER ValueDisplayName
         The required value's label, such as 'Block'. With -FromPolicy it picks the option by label (of every setting,
         when there are several).
-
     .PARAMETER Expected
         The required value: the option id for a choice setting (..._0), the value for others. Several for in/notIn.
         With several settings: one value for all of them (such as a match pattern) or one per setting in the same
         order, a setting's values for in, notIn and contains separated by '|'.
-
     .PARAMETER ChildSettingDefinitionId
         Child settings that must also be set, in the same policy (such as the options under an Administrative
         Templates setting's Enabled). With -FromPolicy, every child the policy configures under the setting is
@@ -78,44 +66,34 @@ function New-JLMaesterTest {
         '<setting>: <child> is set to Enabled: <child value>'; -ChildExpected, -ChildDisplayName and
         -ChildValueDisplayName given with it replace the policy's values and names. Without -FromPolicy, pairs with
         -ChildExpected, -ChildDisplayName and -ChildValueDisplayName, in the same order.
-
     .PARAMETER ChildExpected
         The value each child setting requires (the option id for a choice setting), compared with -ChildOperator (eq
         when left out).
-
     .PARAMETER ChildDisplayName
         Each child setting's name as Intune shows it, such as 'Configure MrxSmb10 driver'.
-
     .PARAMETER ChildValueDisplayName
         Each child's required value label, such as 'Disable driver (recommended)'. Added to the title after the
         setting's value: '<setting> is set to Enabled: Disable driver (recommended)'.
-
     .PARAMETER ChildOperator
         How each child setting is compared, in the same order as the children: eq when left out. ge for a size 'or
         greater', in for one of several values (separated by '|' in -ChildExpected, as a CSV cell already uses ';'
         between children), exists for any value (no -ChildExpected needed). With -FromPolicy, -ChildDisplayName and
         -ChildValueDisplayName replace the policy's names in the title and .md, such as '32,768 or more'.
-
     .PARAMETER NoChildren
         With -FromPolicy, check only the setting, not the children the policy configures under it.
-
     .PARAMETER Replace
         Rewrites the test that already checks -Recommendation, under the same ID: its files, README row and CHANGELOG
         line (the framework requirement stays). -Severity and -Description default to the old test's.
-
     .PARAMETER Level
         The requirement's level fact, such as L1. Defaults to the framework file's Level, or the level every existing
         requirement shares.
-
     .PARAMETER Product
         The product the Maester report groups the test under (its Category). Defaults to Product in the pack's
         framework file, such as Intune.
-
     .PARAMETER Feature
         The feature within the product. Defaults to the framework file's Name without '(Level n)', followed by the
         pack's level, such as CIS Microsoft Intune for Windows 11 Benchmark (L1), so -Feature in Invoke-Maester picks
         one level.
-
     .PARAMETER Area
         The section the setting is in, such as Above Lock; the report filters on it. Defaults to the setting's own
         Intune category, the last level of its category path (-CategoryPath, or read by -FromPolicy): Sleep Settings
@@ -127,10 +105,8 @@ function New-JLMaesterTest {
         such as a service set by a script. It needs -SettingDisplayName, -ValueDisplayName and -Area, and takes no
         setting (-FromPolicy, -SettingDefinitionId, -Expected, ...). The test still links to its recommendation, so
         the report lists it as skipped.
-
     .PARAMETER NoVersionBump
         Do not bump the pack version even when its current version is released.
-
     .EXAMPLE
         New-JLMaesterTest -Pack cis-win11-intune-l1 -Recommendation 1.1 -Severity High `
             -FromPolicy 'W11_D_CISL1_*' -SettingDisplayName 'Allow Cortana Above Lock' -ValueDisplayName Block `
@@ -138,13 +114,11 @@ function New-JLMaesterTest {
 
         Takes Area from the setting's Intune category, Product and Feature from the framework file, then returns both
         drafts without writing.
-
     .EXAMPLE
         New-JLMaesterTest -Path .\tests.csv -Pack cis-win11-intune-l1 -WhatIf
 
         Drafts one test per row of tests.csv (columns such as Recommendation, Severity, FromPolicy, SettingDisplayName,
         ValueDisplayName, Area) and writes nothing. Without -WhatIf it writes them all, or none.
-
     .EXAMPLE
         New-JLMaesterTest -Pack cis-win11-intune-l1 -Recommendation 1.1 -Severity High -Platform windows10 -Area 'Above Lock' `
             -SettingDefinitionId device_vendor_msft_policy_config_abovelock_allowcortanaabovelock `
@@ -280,7 +254,7 @@ function New-JLMaesterTest {
         if (-not $Area) { throw 'With -SkipReason, pass -Area, such as System Services.' }
     }
 
-    # --- Read the setting from a policy in the tenant ---------------------------------------------------------------
+    # Read the setting from a policy in the tenant
     $pickedChildren = $false
     $SettingDefinitionId = @($SettingDefinitionId | Where-Object { $_ })
     # Several settings that one recommendation needs, each checked on its own (Test-JlIntuneSetting): the same timer
@@ -427,7 +401,7 @@ function New-JLMaesterTest {
         }
     }
 
-    # --- Check the inputs ---------------------------------------------------------------------------------------------
+    # Check the inputs
     $childCount = $ChildSettingDefinitionId.Count
     if (-not $SkipReason) {
         if ($Source -eq 'settingsCatalog') {
@@ -517,7 +491,7 @@ function New-JLMaesterTest {
         if (Select-String -LiteralPath $file.FullName -Pattern "^function $([regex]::Escape($FunctionName))\b" -Quiet) { throw "$($file.Name) already defines $FunctionName; pass -FunctionName." }
     }
 
-    # --- The test file ------------------------------------------------------------------------------------------------
+    # The test file
     $attribute = [ordered]@{
         Id           = $id
         Title        = $Title
@@ -642,7 +616,7 @@ function New-JLMaesterTest {
     }
     $ps1Text = $ps1 -join "`n"
 
-    # --- The markdown file --------------------------------------------------------------------------------------------
+    # The markdown file
     $platformShort = switch ($Platform) { 'windows10' { 'Windows' } '' { '' } default { $Platform } }
     $platformLong = switch ($Platform) { 'windows10' { 'Windows 10 and later' } default { $Platform } }
     # Names and values are written as Markdown, so its characters are escaped: \\*\NETLOGON would show as \*\NETLOGON.
@@ -720,7 +694,7 @@ function New-JLMaesterTest {
         '%TestResult%'
     ) -join "`n"
 
-    # --- Version and records ------------------------------------------------------------------------------------------
+    # Version and records
     $current = [string]$info.Manifest.Version
     $released = Test-JLPackReleased -Repo $repo -Folder $Pack -Version $current
     $version = $current
